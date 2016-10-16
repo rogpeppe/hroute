@@ -1,4 +1,4 @@
-package hrouter
+package hroute
 
 import (
 	"bytes"
@@ -13,7 +13,10 @@ type Param struct {
 
 type Params []Param
 
-type Handle interface {
+type Handler interface {
+	// TODO should we rename this so that it's possible
+	// to implement both hroute.Handler and http.Handler
+	// on the same type?
 	ServeHTTP(http.ResponseWriter, *http.Request, Params)
 }
 
@@ -43,14 +46,14 @@ type node struct {
 
 type handlerEntry struct {
 	// handler holds the handler registered for a method in a node.
-	handler Handle
+	handler Handler
 
 	// emptyParams holds the handler parameters with names
 	// filled out but empty values.
 	emptyParams Params
 }
 
-func (n *node) addRoute(pat *Pattern, method string, h Handle) {
+func (n *node) addRoute(pat *Pattern, method string, h Handler) {
 	var prefix string
 	prefix, pat.static = pat.static[0], pat.static[1:]
 	n.addStaticPrefix(prefix, pat, method, h)
@@ -63,7 +66,7 @@ func (n *node) addRoute(pat *Pattern, method string, h Handle) {
 // by the pattern.
 //
 // Precondition: pat.static is either empty or its first element is empty.
-func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Handle) {
+func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Handler) {
 	common := commonPrefix(prefix, n.path)
 	if len(common) < len(n.path) {
 		// This node's prefix is too long; split it,
@@ -111,7 +114,7 @@ func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Han
 	pat.static = pat.static[1:]
 	// Invariant: pat.static is either empty or its first element is non-empty.
 	if len(pat.static) == 0 {
-		// We've reach our destination.
+		// We've reached our destination.
 		n.setHandler(method, h, pat.vars)
 		return
 	}
@@ -121,7 +124,7 @@ func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Han
 	n.addStaticPrefix(prefix, pat, method, h)
 }
 
-func (n *node) setHandler(method string, h Handle, vars []string) {
+func (n *node) setHandler(method string, h Handler, vars []string) {
 	if n.handlers == nil {
 		n.handlers = make(map[string]handlerEntry)
 	}
@@ -200,7 +203,7 @@ func (n *node) lookup(path string) (*node, []string) {
 // to be passed to that handler.
 // It also returns any node found for the path, even if no handler
 // was found.
-func (n *node) getValue(method, path string) (h Handle, p Params, foundNode *node) {
+func (n *node) getValue(method, path string) (h Handler, p Params, foundNode *node) {
 	foundNode, vars := n.lookup(path)
 	if foundNode == nil {
 		return nil, nil, nil
@@ -227,19 +230,6 @@ func (n *node) getValue(method, path string) (h Handle, p Params, foundNode *nod
 		p[i].Value = v
 	}
 	return entry.handler, p, foundNode
-}
-
-func (n *node) slashRedirect(path string) string {
-	if strings.HasSuffix(path, "/") {
-		path = path[0 : len(path)-1]
-	} else {
-		path += "/"
-	}
-	n, _ = n.lookup(path)
-	if n != nil && len(n.handlers) > 0 {
-		return path
-	}
-	return ""
 }
 
 func (n *node) findCaseInsensitivePath(path string, redir bool) (string, bool) {

@@ -1,12 +1,10 @@
-package hrouter
+package hroute
 
 import (
 	"fmt"
 	"strings"
 
 	"gopkg.in/errgo.v1"
-
-	"github.com/julienschmidt/httprouter"
 )
 
 // Pattern holds a parsed path pattern.
@@ -62,8 +60,8 @@ type Pattern struct {
 //
 // would match /foo/info and /foo/bar/info.
 func ParsePattern(p string) (*Pattern, error) {
-	if httprouter.CleanPath(p) != p {
-		return nil, fmt.Errorf("path is not clean")
+	if CleanPath(p) != p {
+		return nil, fmt.Errorf("pattern is not clean")
 	}
 	var pat Pattern
 	if !strings.HasPrefix(p, "/") {
@@ -109,10 +107,16 @@ func ParsePattern(p string) (*Pattern, error) {
 	return &pat, nil
 }
 
-// Names returns all the parameter names specified
+// CatchAll reports whether the pattern has a :* suffix
+// which will catch all paths unde+
+func (p *Pattern) CatchAll() bool {
+	return p.catchAll
+}
+
+// Keys returns all the parameter keys specified
 // in the pattern. The caller must not change
 // the elements of the returned slice.
-func (p *Pattern) Names() []string {
+func (p *Pattern) Keys() []string {
 	return p.vars
 }
 
@@ -120,13 +124,13 @@ func (p *Pattern) Names() []string {
 // given parameter values. All the parameter values
 // must be non-empty. Each value corresponds to
 // the parameter at the same position in the slice
-// returned by Names.
+// returned by Keys.
 //
 // For example, if the original pattern path
-// was /foo/:name/*rest then Names would
+// was /foo/:name/*rest then Keys would
 // return {"name", "rest"} and Path("a", "/b/c")
 // would return /foo/a/b/c.
-func (p *Pattern) Path(vals []string) (string, error) {
+func (p *Pattern) Path(vals ...string) (string, error) {
 	if len(vals) != len(p.vars) {
 		return "", errgo.Newf("too few parameters")
 	}
@@ -151,9 +155,17 @@ func (p *Pattern) Path(vals []string) (string, error) {
 			if val == "" {
 				return "", errgo.Newf("empty parameter")
 			}
-			// TODO check that val contains a / ?
+			// TODO check that val does not a / ?
 		}
 		path = append(path, val...)
 	}
 	return string(path), nil
+}
+
+// PathWithParams returns a path constructed by interpolating
+// the parameter values in p, which must contain elements
+// with all the keys returned by p.Keys.
+func (p *Pattern) PathWithParams(Params) (string, error) {
+	// TODO implement.
+	return "", errgo.Newf("unimplemented")
 }

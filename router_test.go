@@ -1,77 +1,99 @@
-package hrouter
+package hroute_test
 
 import (
-	//	"github.com/kr/pretty"
+	"fmt"
 	"log"
 	"net/http"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/rogpeppe/hroute"
 )
 
 var parsePatternTests = []struct {
-	path          string
-	expectPattern Pattern
-	expectError   string
+	path            string
+	expectError     string
+	expectKeys      []string
+	expectPath      string
+	expectPathError string
 }{{
-	path: "/foo/bar",
-	expectPattern: Pattern{
-		static: []string{"/foo/bar"},
-	},
+	path:       "/foo/bar",
+	expectPath: "/foo/bar",
 }, {
-	path: "/foo/:bar",
-	expectPattern: Pattern{
-		static: []string{"/foo/", ""},
-		vars:   []string{"bar"},
-	},
+	path:       "/foo/:bar",
+	expectKeys: []string{"bar"},
+	expectPath: "/foo/0",
 }, {
-	path: "/:x/:y/*end",
-	expectPattern: Pattern{
-		static:   []string{"/", "", "/", "", "/", ""},
-		vars:     []string{"x", "y", "end"},
-		catchAll: true,
-	},
+	path:       "/:x/:y/*end",
+	expectKeys: []string{"x", "y", "end"},
+	expectPath: "/0/1/2",
 }, {
-	path: "/a/b/:x/c/d",
-	expectPattern: Pattern{
-		static: []string{"/a/b/", "", "/c/d"},
-		vars:   []string{"x"},
-	},
+	path:       "/a/b/:x/c/d",
+	expectKeys: []string{"x"},
+	expectPath: "/a/b/0/c/d",
 }, {
-	path: "/a/b/:x/c/d",
-	expectPattern: Pattern{
-		static: []string{"/a/b/", "", "/c/d"},
-		vars:   []string{"x"},
-	},
+	path:       "/a/b/:x/c/d",
+	expectKeys: []string{"x"},
+	expectPath: "/a/b/0/c/d",
 }}
 
 func TestParsePattern(t *testing.T) {
 	for i, test := range parsePatternTests {
 		t.Logf("test %d: %v", i, test.path)
-		pat, err := ParsePattern(test.path)
+		pat, err := hroute.ParsePattern(test.path)
 		if test.expectError != "" {
 			if err == nil {
 				t.Errorf("expected error got nil want %q", test.expectError)
 			} else if err.Error() != test.expectError {
 				t.Errorf("expected error; got %q want %q", err, test.expectError)
 			}
+			continue
+		}
+		gotKeys := pat.Keys()
+		if len(gotKeys) == 0 {
+			gotKeys = nil
+		}
+		if want := test.expectKeys; !reflect.DeepEqual(gotKeys, want) {
+			t.Errorf("keys mismatch; got %#v want %#v", gotKeys, want)
+			continue
+		}
+		vals := make([]string, len(pat.Keys()))
+		for i := range vals {
+			vals[i] = fmt.Sprint(i)
+		}
+		if pat.CatchAll() {
+			vals[len(vals)-1] = "/" + vals[len(vals)-1]
+		}
+		gotPath, gotPathError := pat.Path(vals...)
+		if test.expectPathError != "" {
+			if gotPathError == nil || gotPathError.Error() != test.expectPathError {
+				t.Errorf("unexpected path error; got %q want %q", gotPathError, test.expectPathError)
+			}
 		} else {
-			test.expectPattern.staticSize = len(strings.Join(test.expectPattern.static, ""))
-			if !reflect.DeepEqual(pat, &test.expectPattern) {
-				t.Errorf("mismatch; got %#v want %#v", pat, test.expectPattern)
+			if gotPath != test.expectPath {
+				t.Errorf("path mismatch; got %q want %q", gotPath, test.expectPath)
 			}
 		}
 	}
 }
 
 type lookupTest struct {
-	path           string
-	expectParams   Params
-	expectNotFound bool
-	expectTSR      string
+	// path holds the path to be looked up.
+	// By default, it will be looked up with the GET method
+	// but an alternative method can be specified
+	// by prefixing the path with the method and a space.
+	path string
+
+	// expectHandler holds the handler that's expected
+	// to be found when looking up path.
+	// If it's nil, pathHandler{methid path} is expected.
+	expectHandler hroute.Handler
+
+	expectParams hroute.Params
 }
 
-var lookupTests = []struct {
+var handlerTests = []struct {
 	about   string
 	add     []string
 	lookups []lookupTest
@@ -94,17 +116,17 @@ var lookupTests = []struct {
 	}, {
 		path: "/fooey",
 	}, {
-		path:           "/f",
-		expectNotFound: true,
+		path:          "/f",
+		expectHandler: hroute.NotFound{},
 	}, {
-		path:           "/foo",
-		expectNotFound: true,
+		path:          "/foo",
+		expectHandler: hroute.NotFound{},
 	}, {
-		path:           "/foobaz",
-		expectNotFound: true,
+		path:          "/foobaz",
+		expectHandler: hroute.NotFound{},
 	}, {
-		path:           "/foofle",
-		expectNotFound: true,
+		path:          "/foofle",
+		expectHandler: hroute.NotFound{},
 	}},
 }, {
 	about: "single wildcard route",
@@ -112,11 +134,15 @@ var lookupTests = []struct {
 		"/foo/:bar",
 	},
 	lookups: []lookupTest{{
-		path:         "/foo/something",
-		expectParams: Params{{"bar", "something"}},
+		path:          "/foo/something",
+		expectHandler: pathHandler{"GET", "/foo/:bar"},
+		expectParams:  hroute.Params{{"bar", "something"}},
 	}, {
-		path:           "/foo//",
-		expectNotFound: true,
+		path: "/foo//",
+		expectHandler: hroute.Redirect{
+			Path: "/foo/",
+			Code: http.StatusMovedPermanently,
+		},
 	}},
 }, {
 	about: "two wildcard routes",
@@ -125,11 +151,13 @@ var lookupTests = []struct {
 		"/arble/:x",
 	},
 	lookups: []lookupTest{{
-		path:         "/foo/something",
-		expectParams: Params{{"bar", "something"}},
+		path:          "/foo/something",
+		expectHandler: pathHandler{"GET", "/foo/:bar"},
+		expectParams:  hroute.Params{{"bar", "something"}},
 	}, {
-		path:         "/arble/something",
-		expectParams: Params{{"x", "something"}},
+		path:          "/arble/something",
+		expectHandler: pathHandler{"GET", "/arble/:x"},
+		expectParams:  hroute.Params{{"x", "something"}},
 	}},
 }, {
 	about: "single catch-all route",
@@ -137,11 +165,13 @@ var lookupTests = []struct {
 		"/*foo",
 	},
 	lookups: []lookupTest{{
-		path:         "/arble/something",
-		expectParams: Params{{"foo", "/arble/something"}},
+		path:          "/arble/something",
+		expectHandler: pathHandler{"GET", "/*foo"},
+		expectParams:  hroute.Params{{"foo", "/arble/something"}},
 	}, {
-		path:         "/",
-		expectParams: Params{{"foo", "/"}},
+		path:          "/",
+		expectHandler: pathHandler{"GET", "/*foo"},
+		expectParams:  hroute.Params{{"foo", "/"}},
 	}},
 }, {
 	about: "catch-all route with static",
@@ -150,11 +180,13 @@ var lookupTests = []struct {
 		"/x/:bar",
 	},
 	lookups: []lookupTest{{
-		path:         "/arble/something",
-		expectParams: Params{{"foo", "/arble/something"}},
+		path:          "/arble/something",
+		expectHandler: pathHandler{"GET", "/*foo"},
+		expectParams:  hroute.Params{{"foo", "/arble/something"}},
 	}, {
-		path:         "/x/something",
-		expectParams: Params{{"bar", "something"}},
+		path:          "/x/something",
+		expectHandler: pathHandler{"GET", "/x/:bar"},
+		expectParams:  hroute.Params{{"bar", "something"}},
 	}},
 }, {
 	about: "catch-all route with wildcard element at same level",
@@ -163,14 +195,17 @@ var lookupTests = []struct {
 		"/:bar",
 	},
 	lookups: []lookupTest{{
-		path:         "/arble/something",
-		expectParams: Params{{"foo", "/arble/something"}},
+		path:          "/arble/something",
+		expectHandler: pathHandler{"GET", "/*foo"},
+		expectParams:  hroute.Params{{"foo", "/arble/something"}},
 	}, {
-		path:         "/arble",
-		expectParams: Params{{"bar", "arble"}},
+		path:          "/arble",
+		expectHandler: pathHandler{"GET", "/:bar"},
+		expectParams:  hroute.Params{{"bar", "arble"}},
 	}, {
-		path:         "/",
-		expectParams: Params{{"foo", "/"}},
+		path:          "/",
+		expectHandler: pathHandler{"GET", "/*foo"},
+		expectParams:  hroute.Params{{"foo", "/"}},
 	}},
 }, {
 	about: "path with several wildcards",
@@ -178,17 +213,18 @@ var lookupTests = []struct {
 		"/:foo/:bar/:baz",
 	},
 	lookups: []lookupTest{{
-		path:         "/one/two/three",
-		expectParams: Params{{"foo", "one"}, {"bar", "two"}, {"baz", "three"}},
+		path:          "/one/two/three",
+		expectHandler: pathHandler{"GET", "/:foo/:bar/:baz"},
+		expectParams:  hroute.Params{{"foo", "one"}, {"bar", "two"}, {"baz", "three"}},
 	}, {
-		path:           "/one",
-		expectNotFound: true,
+		path:          "/one",
+		expectHandler: hroute.NotFound{},
 	}, {
-		path:           "/one/two",
-		expectNotFound: true,
+		path:          "/one/two",
+		expectHandler: hroute.NotFound{},
 	}, {
-		path:           "/one/two/three/four",
-		expectNotFound: true,
+		path:          "/one/two/three/four",
+		expectHandler: hroute.NotFound{},
 	}},
 }, {
 	about: "specific path overrides wildcard",
@@ -197,11 +233,13 @@ var lookupTests = []struct {
 		"/:foo/:x/baz",
 	},
 	lookups: []lookupTest{{
-		path:         "/x/bar/baz",
-		expectParams: Params{{"foo", "x"}},
+		path:          "/x/bar/baz",
+		expectHandler: pathHandler{"GET", "/:foo/bar/baz"},
+		expectParams:  hroute.Params{{"foo", "x"}},
 	}, {
-		path:         "/y/floof/baz",
-		expectParams: Params{{"foo", "y"}, {"x", "floof"}},
+		path:          "/y/floof/baz",
+		expectHandler: pathHandler{"GET", "/:foo/:x/baz"},
+		expectParams:  hroute.Params{{"foo", "y"}, {"x", "floof"}},
 	}},
 }, {
 	about: "no backtracking",
@@ -210,13 +248,15 @@ var lookupTests = []struct {
 		"/a/:x/d",
 	},
 	lookups: []lookupTest{{
-		path: "/a/b/c",
+		path:          "/a/b/c",
+		expectHandler: pathHandler{"GET", "/a/b/c"},
 	}, {
-		path:         "/a/xx/d",
-		expectParams: Params{{"x", "xx"}},
+		path:          "/a/xx/d",
+		expectHandler: pathHandler{"GET", "/a/:x/d"},
+		expectParams:  hroute.Params{{"x", "xx"}},
 	}, {
-		path:           "/a/b/d",
-		expectNotFound: true,
+		path:          "/a/b/d",
+		expectHandler: hroute.NotFound{},
 	}},
 }, {
 	about: "trailing slash redirect",
@@ -225,12 +265,14 @@ var lookupTests = []struct {
 		"/foo/baz/blah",
 	},
 	lookups: []lookupTest{{
-		path:           "/foo/bar",
-		expectTSR:      "/foo/bar/",
-		expectNotFound: true,
+		path: "/foo/bar",
+		expectHandler: hroute.Redirect{
+			Code: 301,
+			Path: "/foo/bar/",
+		},
 	}, {
-		path:           "/foo",
-		expectNotFound: true,
+		path:          "/foo",
+		expectHandler: hroute.NotFound{},
 	}},
 }, {
 	about: "trailing slash redirect at node boundary",
@@ -239,9 +281,11 @@ var lookupTests = []struct {
 		"/foo/barfle",
 	},
 	lookups: []lookupTest{{
-		path:           "/foo/bar",
-		expectTSR:      "/foo/bar/",
-		expectNotFound: true,
+		path: "/foo/bar",
+		expectHandler: hroute.Redirect{
+			Code: 301,
+			Path: "/foo/bar/",
+		},
 	}, {
 		path: "/foo/barfle",
 	}},
@@ -252,49 +296,40 @@ var lookupTests = []struct {
 		"/foo/barfle",
 	},
 	lookups: []lookupTest{{
-		path:           "/foo/bar",
-		expectNotFound: true,
+		path:          "/foo/bar",
+		expectHandler: hroute.NotFound{},
 	}, {
 		path: "/foo/barfle",
 	}},
 }}
 
-func TestLookup(t *testing.T) {
-	for i, test := range lookupTests {
+func TestHandlerToUse(t *testing.T) {
+	for i, test := range handlerTests {
 		log.Printf("\ntest %d: %v", i, test.about)
 		t.Logf("\ntest %d: %v", i, test.about)
 
-		n := &node{
-			path: "/",
-		}
+		r := hroute.New()
 		for _, p := range test.add {
-			pat, err := ParsePattern(p)
-			if err != nil {
-				t.Fatalf("cannot parse pattern %q: %v", err)
-			}
-			n.addRoute(pat, "GET", nopHandler(p))
+			method, path := methodAndPath(p)
+			r.Handle(path, pathHandler{method, path}, method)
 		}
-		//pretty.Println(n)
 		for _, ltest := range test.lookups {
 			log.Printf("- lookup %q", ltest.path)
 			t.Logf("- lookup %q", ltest.path)
-			resultHandler, resultParams, resultNode := n.getValue("GET", ltest.path)
-			var resultTSR string
-			if resultHandler == nil && (resultNode == nil || len(resultNode.handlers) == 0) {
-				resultTSR = n.slashRedirect(ltest.path)
-			}
-			if resultTSR != ltest.expectTSR {
-				t.Errorf("unexpected trailing-slash-redirect value; got %v want %v", resultTSR, ltest.expectTSR)
-			}
-			if ltest.expectNotFound {
-				if resultHandler != nil {
-					t.Errorf("unexpectedly found result %q", resultHandler)
+			method, path := methodAndPath(ltest.path)
+			resultHandler, resultParams := r.HandlerToUse(method, path)
+			expectHandler := ltest.expectHandler
+			if expectHandler == nil {
+				expectHandler = pathHandler{
+					method: method,
+					path:   path,
 				}
-				continue
 			}
-			if resultHandler == nil {
-				t.Errorf("expected found but it wasn't")
-				continue
+			if !reflect.DeepEqual(resultHandler, expectHandler) {
+				t.Errorf("unexpected result handler; got %#v want %#v", resultHandler, expectHandler)
+			}
+			if len(resultParams) == 0 {
+				resultParams = nil
 			}
 			if !reflect.DeepEqual(resultParams, ltest.expectParams) {
 				t.Errorf("unexpected result params; got %#v want %#v", resultParams, ltest.expectParams)
@@ -303,8 +338,26 @@ func TestLookup(t *testing.T) {
 	}
 }
 
+func methodAndPath(p string) (method, path string) {
+	method = "GET"
+	path = p
+	if i := strings.Index(path, " "); i != -1 {
+		method = p[0:i]
+		path = path[i+1:]
+	}
+	return method, path
+}
+
 type nopHandler string
 
-func (nopHandler) ServeHTTP(http.ResponseWriter, *http.Request, Params) {
+func (nopHandler) ServeHTTP(http.ResponseWriter, *http.Request, hroute.Params) {
 	panic("nope")
+}
+
+type pathHandler struct {
+	method string
+	path   string
+}
+
+func (h pathHandler) ServeHTTP(w http.ResponseWriter, req *http.Request, params hroute.Params) {
 }
