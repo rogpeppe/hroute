@@ -3,6 +3,8 @@ package hroute
 import (
 	"net/http"
 	"strings"
+
+	"gopkg.in/errgo.v1"
 )
 
 // Router represents an HTTP router. Its exported variables should not be
@@ -12,13 +14,13 @@ type Router struct {
 
 	// NotFoundHandler is the handler used when no matching route is found.
 	// If it is nil, NotFound{} is used.
-	NotFound Handler
+	NotFound RouteHandler
 
 	// MethodNotAllowedHandler is the handler used when a handler
 	// cannot be found for a given method but there is a handler
 	// for the requested path. If it is nil, MethodNotAllowed{} will be
 	// used.
-	MethodNotAllowed Handler
+	MethodNotAllowed RouteHandler
 
 	// When Panic is not nil, panics in handlers will be
 	// recovered and PanicHandler will be called with the HTTP
@@ -29,14 +31,14 @@ type Router struct {
 	// http error code 500 (Internal Server Error). The handler can
 	// be used to keep your server from crashing because of
 	// unrecovered panics.
-	Panic func(w http.ResponseWriter, req *http.Request, h http.Handler, p Params, err interface{})
+	Panic func(w http.ResponseWriter, req *http.Request, h RouteHandler, p Params, err interface{})
 }
 
 // Param holds a path parameter that represents the value of
 // a wildcard parameter.
 type Param struct {
 	// Key holds the key of the parameter.
-	Key   string
+	Key string
 
 	// Value holds its value. When the wildcard is a "*",
 	// the value will always hold a leading slash.
@@ -51,7 +53,7 @@ type Params []Param
 // See HTTPHandler for an adaptor that will put the parameters
 // into the request context (only available on Go 1.7 and later).
 type RouteHandler interface {
-	HandleRoute(http.ResponseWriter, *http.Request, Params)
+	ServeRoute(http.ResponseWriter, *http.Request, Params)
 }
 
 // New returns a new Router.
@@ -74,20 +76,15 @@ func New() *Router {
 func (r *Router) Handle(method, pattern string, handler RouteHandler) *Pattern {
 	pat, err := ParsePattern(pattern)
 	if err != nil {
-		panic(err)
+		panic(errgo.Newf("cannot parse pattern %q: %v", pattern, err))
 	}
-	r.root.addRoute(pat, methid, h)
+	r.root.addRoute(pat, method, handler)
 	return pat
 }
 
-func (r *Router) HandleFunc(method, pattern string, handler func(http.ResponseWriter, *http.Request, Params)) *Pattern {
-	return r.Handle(method, pattern, RouteHandlerFunc(handler))
-}
-
-// Handler returns the handler to use for the given method and path,
-// the pattern associated with the route and parameters
-// appropriate for passing to the handler.
-func (r *Router) Handler(method, path string) (RouteHandler, *Pattern, Params)
+//func (r *Router) HandleFunc(method, pattern string, handler func(http.ResponseWriter, *http.Request, Params)) *Pattern {
+//	return r.Handle(method, pattern, RouteHandlerFunc(handler))
+//}
 
 // ServeHTTP implements http.Handler by consulting req.URL.Method
 // and req.URL.Path and calling the registered handler that most closely
@@ -96,33 +93,34 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.ServeHTTPSubroute(w, req, req.URL.Path)
 }
 
-// Handler looks up the handler for the given method and path
-// and returns the found handler and its matched parameters.
-// If there is no handler found, it returns zero results.
-func (r *Router) Handler(method string, path string) (Handler, Params) {
-	h, p, _ := r.root.getValue(method, path)
-	return h, p
+// Handler returns the handler to use for the given method and path, the
+// parameters appropriate for passing to the handler, and the pattern
+// associated with the route. If there is no handler found, it returns
+// zero results.
+func (r *Router) Handler(method, path string) (RouteHandler, Params, *Pattern) {
+	h, p, pat, _ := r.root.getValue(method, path)
+	return h, p, pat
 }
 
-// HandlerToUse returns the handler that will be used to handle
-// a request with the given method and path.
-// It never returns a nil handler.
-// If a handler has not been registered with the given path,
-// a value of type NotFound, MethodNotAllowed or Redirect
-// will be returned.
-func (r *Router) HandlerToUse(method, path string) (RouteHandler, Params) {
-	h, p, node := r.root.getValue(method, path)
+// HandlerToUse returns the handler that will be used to handle a
+// request with the given method and path. It never returns a nil
+// handler. If a handler has not been registered with the given path, a
+// value of type NotFound, MethodNotAllowed or Redirect will be
+// returned. If a handler was registered, the returned pattern will hold
+// the pattern it was registered with.
+func (r *Router) HandlerToUse(method, path string) (RouteHandler, Params, *Pattern) {
+	h, p, pat, node := r.root.getValue(method, path)
 	if h != nil {
-		return h, p
+		return h, p, pat
 	}
 	if node != nil && len(node.handlers) > 0 {
 		// There is at least one other handler defined for this path,
 		// so don't redirect.
-		return r.MethodNotAllowed, Params{}
+		return r.MethodNotAllowed, Params{}, nil
 	}
 	if method == "CONNECT" || path == "/" {
 		// Can't redirect CONNECT; no need to redirect /.
-		return r.NotFound, Params{}
+		return r.NotFound, Params{}, nil
 	}
 	code := http.StatusMovedPermanently // Permanent redirect, request with GET method
 	if method != "GET" {
@@ -134,29 +132,32 @@ func (r *Router) HandlerToUse(method, path string) (RouteHandler, Params) {
 		return Redirect{
 			Path: cleanPath,
 			Code: code,
-		}, Params{}
+		}, Params{}, nil
 	}
 	if redirectPath := r.slashRedirect(method, path); redirectPath != "" {
 		return Redirect{
 			Path: redirectPath,
 			Code: code,
-		}, Params{}
+		}, Params{}, nil
 	}
-	return r.NotFound, Params{}
+	return r.NotFound, Params{}, nil
 }
 
 // ServeHTTPSubroute is like ServeHTTP except that instead of using
 // req.URL.Path to route requests, it uses the given path
 // parameter.
+//
+// This is useful when the router is being used to serve a subtree
+// but it is desired to keep the request URL intact.
 func (r *Router) ServeHTTPSubroute(w http.ResponseWriter, req *http.Request, path string) {
-	handler, params := r.HandlerToUse(req.Method, path)
+	handler, params, _ := r.HandlerToUse(req.Method, path)
 	if r.Panic != nil {
 		defer r.recover(w, req, handler, params)
 	}
-	handler.ServeHTTP(w, req, params)
+	handler.ServeRoute(w, req, params)
 }
 
-func (r *Router) recover(w http.ResponseWriter, req *http.Request, h Handler, p Params) {
+func (r *Router) recover(w http.ResponseWriter, req *http.Request, h RouteHandler, p Params) {
 	if rcv := recover(); rcv != nil {
 		r.Panic(w, req, h, p, rcv)
 	}
@@ -174,8 +175,7 @@ func (r *Router) slashRedirect(method, path string) string {
 	if n == nil {
 		return ""
 	}
-	_, ok := n.handlers[method]
-	if !ok {
+	if n.entryForMethod(method) == nil {
 		return ""
 	}
 	return path

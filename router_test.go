@@ -49,6 +49,9 @@ func TestParsePattern(t *testing.T) {
 			}
 			continue
 		}
+		if got, want := pat.String(), test.path; got != want {
+			t.Fatalf("pattern string is not the same as it was created with; got %q want %q", got, want)
+		}
 		gotKeys := pat.Keys()
 		if len(gotKeys) == 0 {
 			gotKeys = nil
@@ -87,7 +90,7 @@ type lookupTest struct {
 	// expectHandler holds the handler that's expected
 	// to be found when looking up path.
 	// If it's nil, pathHandler{methid path} is expected.
-	expectHandler hroute.Handler
+	expectHandler hroute.RouteHandler
 
 	expectParams hroute.Params
 
@@ -348,12 +351,12 @@ func TestHandlerToUse(t *testing.T) {
 		pats := make([]*hroute.Pattern, len(test.add))
 		for i, p := range test.add {
 			method, path := methodAndPath(p)
-			pats[i] = r.Handle(path, pathHandler{method, path}, method)
+			pats[i] = r.Handle(method, path, pathHandler{method, path})
 		}
 		for _, ltest := range test.lookups {
 			t.Logf("- lookup %q", ltest.path)
 			method, path := methodAndPath(ltest.path)
-			resultHandler, resultParams := r.HandlerToUse(method, path)
+			resultHandler, resultParams, resultPat := r.HandlerToUse(method, path)
 			expectHandler := ltest.expectHandler
 			if expectHandler == nil {
 				expectHandler = pathHandler{
@@ -374,6 +377,9 @@ func TestHandlerToUse(t *testing.T) {
 				// Check that the matched pattern can be used to recreate
 				// the path.
 				pat := pats[ltest.matchIndex]
+				if resultPat != pat {
+					t.Fatalf("unexpected pattern; got %q want %q", resultPat, pat)
+				}
 				vals := make([]string, len(resultParams))
 				for i, p := range resultParams {
 					vals[i] = p.Value
@@ -401,7 +407,7 @@ func methodAndPath(p string) (method, path string) {
 
 type nopHandler string
 
-func (nopHandler) ServeHTTP(http.ResponseWriter, *http.Request, hroute.Params) {
+func (nopHandler) ServeRoute(http.ResponseWriter, *http.Request, hroute.Params) {
 	panic("nope")
 }
 
@@ -410,5 +416,5 @@ type pathHandler struct {
 	path   string
 }
 
-func (h pathHandler) ServeHTTP(w http.ResponseWriter, req *http.Request, params hroute.Params) {
+func (h pathHandler) ServeRoute(w http.ResponseWriter, req *http.Request, params hroute.Params) {
 }

@@ -15,6 +15,28 @@ type Pattern struct {
 	staticSize int // sum(len(static[i]))
 }
 
+// String returns the string representation of the pattern.
+func (p *Pattern) String() string {
+	size := p.staticSize
+	for _, v := range p.vars {
+		size += len(v)
+	}
+	r := make([]byte, 0, size)
+	for i, s := range p.static {
+		if s != "" {
+			r = append(r, s...)
+			continue
+		}
+		if p.catchAll && i == len(p.static)-1 {
+			r = append(r, '*')
+		} else {
+			r = append(r, ':')
+		}
+		r = append(r, p.vars[i/2]...)
+	}
+	return string(r)
+}
+
 // Each non-empty element of Pattern.static holds a static segment of
 // the path. Each element of vars holds the name of a wildcard variable
 // inside the path between two pattern segments. If catchAll is true,

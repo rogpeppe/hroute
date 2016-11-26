@@ -4,15 +4,16 @@ import (
 	"net/http"
 )
 
+// NotFound implements
 type NotFound struct{}
 
-func (h NotFound) ServeHTTP(w http.ResponseWriter, req *http.Request, _ Params) {
+func (h NotFound) ServeRoute(w http.ResponseWriter, req *http.Request, _ Params) {
 	http.NotFound(w, req)
 }
 
 type MethodNotAllowed struct{}
 
-func (h MethodNotAllowed) ServeHTTP(w http.ResponseWriter, req *http.Request, _ Params) {
+func (h MethodNotAllowed) ServeRoute(w http.ResponseWriter, req *http.Request, _ Params) {
 	http.Error(w,
 		http.StatusText(http.StatusMethodNotAllowed),
 		http.StatusMethodNotAllowed,
@@ -24,6 +25,6 @@ type Redirect struct {
 	Code int
 }
 
-func (r Redirect) ServeHTTP(w http.ResponseWriter, req *http.Request, _ Params) {
+func (r Redirect) ServeRoute(w http.ResponseWriter, req *http.Request, _ Params) {
 	http.Redirect(w, req, r.Path, r.Code)
 }
