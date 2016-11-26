@@ -6,20 +6,6 @@ import (
 	"strings"
 )
 
-type Param struct {
-	Key   string
-	Value string
-}
-
-type Params []Param
-
-type Handler interface {
-	// TODO should we rename this so that it's possible
-	// to implement both hroute.Handler and http.Handler
-	// on the same type?
-	ServeHTTP(http.ResponseWriter, *http.Request, Params)
-}
-
 type node struct {
 	// path holds the path segment matched by
 	// this node.
@@ -46,11 +32,14 @@ type node struct {
 
 type handlerEntry struct {
 	// handler holds the handler registered for a method in a node.
-	handler Handler
+	handler RouteHandler
 
 	// emptyParams holds the handler parameters with names
 	// filled out but empty values.
 	emptyParams Params
+
+	// pattern holds the pattern that was used to register the entry.
+	pattern *Pattern
 }
 
 func (n *node) addRoute(pat *Pattern, method string, h Handler) {
@@ -59,11 +48,9 @@ func (n *node) addRoute(pat *Pattern, method string, h Handler) {
 	n.addStaticPrefix(prefix, pat, method, h)
 }
 
-// addStaticPrefix adds a route to the given node for the
-// given static prefix. The given pattern holds the
-// remaining elements of the pattern
-// we're adding and all the variable names defined
-// by the pattern.
+// addStaticPrefix adds a route to the given node for the given static
+// prefix. The given pattern holds the remaining elements of the pattern
+// we're adding and all the variable names defined by the pattern.
 //
 // Precondition: pat.static is either empty or its first element is empty.
 func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Handler) {
@@ -97,11 +84,11 @@ func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Han
 	// Invariant: common == prefix
 	if len(pat.static) == 0 {
 		// We've arrived at our destination.
-		n.setHandler(method, h, pat.vars)
+		n.setHandler(method, h, pat)
 		return
 	}
-	// We're adding a wildcard, which might be a
-	// single segment or a final catch-all segment.
+	// We're adding a wildcard, which might be a single segment or a
+	// final catch-all segment.
 	wildPt := &n.wild
 	if len(pat.static) == 1 && pat.catchAll {
 		wildPt = &n.catchAll
@@ -115,7 +102,7 @@ func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Han
 	// Invariant: pat.static is either empty or its first element is non-empty.
 	if len(pat.static) == 0 {
 		// We've reached our destination.
-		n.setHandler(method, h, pat.vars)
+		n.setHandler(method, h, pat)
 		return
 	}
 	// Descend further into the tree
@@ -124,7 +111,7 @@ func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Han
 	n.addStaticPrefix(prefix, pat, method, h)
 }
 
-func (n *node) setHandler(method string, h Handler, vars []string) {
+func (n *node) setHandler(method string, h Handler, pat *Pattern) {
 	if n.handlers == nil {
 		n.handlers = make(map[string]handlerEntry)
 	}
@@ -139,6 +126,7 @@ func (n *node) setHandler(method string, h Handler, vars []string) {
 	n.handlers[method] = handlerEntry{
 		handler:     h,
 		emptyParams: emptyParams,
+		pattern: pat,
 	}
 }
 
@@ -203,7 +191,7 @@ func (n *node) lookup(path string) (*node, []string) {
 // to be passed to that handler.
 // It also returns any node found for the path, even if no handler
 // was found.
-func (n *node) getValue(method, path string) (h Handler, p Params, foundNode *node) {
+func (n *node) getValue(method, path string) (h RouteHandler, p Params, foundNode *node) {
 	foundNode, vars := n.lookup(path)
 	if foundNode == nil {
 		return nil, nil, nil

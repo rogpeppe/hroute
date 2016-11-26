@@ -21,9 +21,8 @@ type Pattern struct {
 // the last variable is a * pattern that matches any number of trailing
 // path elements.
 //
-// Every place in static corresponding to a wildcard
-// variable is empty. The variable for static[i]
-// is at vars[i/2].
+// Every place in static corresponding to a wildcard variable is empty.
+// The variable for static[i] is at vars[i/2].
 //
 // For example, parsing: /:foo/a/b/c/:e/*c
 // would result in:
@@ -34,12 +33,10 @@ type Pattern struct {
 //		catchAll: true,
 //	}
 
-// ParsePattern parses the given router pattern
-// from the given path.
-// A valid pattern always starts with a leading "/".
-// Named portions of the path are dynamic path
-// segments, of the form :param. They match a segment of the path,
-// so they must be preceded by a "/" and followed
+// ParsePattern parses the given router pattern from the given path. A
+// valid pattern always starts with a leading "/". Named portions of the
+// path are dynamic path segments, of the form :param. They match a
+// segment of the path, so they must be preceded by a "/" and followed
 // by a "/" or appear at the end of the string.
 //
 // For example:
@@ -48,11 +45,10 @@ type Pattern struct {
 //
 // would match /foo/info but not /foo/bar/info.
 //
-// A catch-all pattern of the form *param may appear
-// at the end of the path and matches any number of
-// path segments at the end of the pattern.
-// It must be preceded by a "/". The value of
-// a catch-all parameter will include a leading "/".
+// A catch-all pattern of the form *param may appear at the end of the
+// path and matches any number of path segments at the end of the
+// pattern. It must be preceded by a "/". The value of a catch-all
+// parameter will include a leading "/".
 //
 // For example:
 //
