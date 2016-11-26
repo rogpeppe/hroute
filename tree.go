@@ -55,8 +55,9 @@ type handlerEntry struct {
 
 func (n *node) addRoute(pat *Pattern, method string, h Handler) {
 	var prefix string
-	prefix, pat.static = pat.static[0], pat.static[1:]
-	n.addStaticPrefix(prefix, pat, method, h)
+	pat1 := *pat
+	prefix, pat1.static = pat1.static[0], pat1.static[1:]
+	n.addStaticPrefix(prefix, &pat1, method, h)
 }
 
 // addStaticPrefix adds a route to the given node for the
