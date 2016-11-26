@@ -2,7 +2,6 @@ package hroute_test
 
 import (
 	"fmt"
-	"log"
 	"net/http"
 	"reflect"
 	"strings"
@@ -44,9 +43,9 @@ func TestParsePattern(t *testing.T) {
 		pat, err := hroute.ParsePattern(test.path)
 		if test.expectError != "" {
 			if err == nil {
-				t.Errorf("expected error got nil want %q", test.expectError)
+				t.Fatalf("expected error got nil want %q", test.expectError)
 			} else if err.Error() != test.expectError {
-				t.Errorf("expected error; got %q want %q", err, test.expectError)
+				t.Fatalf("expected error; got %q want %q", err, test.expectError)
 			}
 			continue
 		}
@@ -55,7 +54,7 @@ func TestParsePattern(t *testing.T) {
 			gotKeys = nil
 		}
 		if want := test.expectKeys; !reflect.DeepEqual(gotKeys, want) {
-			t.Errorf("keys mismatch; got %#v want %#v", gotKeys, want)
+			t.Fatalf("keys mismatch; got %#v want %#v", gotKeys, want)
 			continue
 		}
 		vals := make([]string, len(pat.Keys()))
@@ -68,11 +67,11 @@ func TestParsePattern(t *testing.T) {
 		gotPath, gotPathError := pat.Path(vals...)
 		if test.expectPathError != "" {
 			if gotPathError == nil || gotPathError.Error() != test.expectPathError {
-				t.Errorf("unexpected path error; got %q want %q", gotPathError, test.expectPathError)
+				t.Fatalf("unexpected path error; got %q want %q", gotPathError, test.expectPathError)
 			}
 		} else {
 			if gotPath != test.expectPath {
-				t.Errorf("path mismatch; got %q want %q", gotPath, test.expectPath)
+				t.Fatalf("path mismatch; got %q want %q", gotPath, test.expectPath)
 			}
 		}
 	}
@@ -91,6 +90,11 @@ type lookupTest struct {
 	expectHandler hroute.Handler
 
 	expectParams hroute.Params
+
+	// matchIndex specifies the index into the add slice
+	// of the expected match. If there's no match, it
+	// should be -1.
+	matchIndex int
 }
 
 var handlerTests = []struct {
@@ -103,7 +107,8 @@ var handlerTests = []struct {
 		"/foo",
 	},
 	lookups: []lookupTest{{
-		path: "/foo",
+		matchIndex: 0,
+		path:       "/foo",
 	}},
 }, {
 	about: "two static routes with shared prefix",
@@ -112,20 +117,26 @@ var handlerTests = []struct {
 		"/fooey",
 	},
 	lookups: []lookupTest{{
-		path: "/foobar",
+		matchIndex: 0,
+		path:       "/foobar",
 	}, {
-		path: "/fooey",
+		matchIndex: 1,
+		path:       "/fooey",
 	}, {
 		path:          "/f",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}, {
 		path:          "/foo",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}, {
 		path:          "/foobaz",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}, {
 		path:          "/foofle",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}},
 }, {
@@ -135,10 +146,12 @@ var handlerTests = []struct {
 	},
 	lookups: []lookupTest{{
 		path:          "/foo/something",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/foo/:bar"},
 		expectParams:  hroute.Params{{"bar", "something"}},
 	}, {
-		path: "/foo//",
+		path:       "/foo//",
+		matchIndex: -1,
 		expectHandler: hroute.Redirect{
 			Path: "/foo/",
 			Code: http.StatusMovedPermanently,
@@ -152,10 +165,12 @@ var handlerTests = []struct {
 	},
 	lookups: []lookupTest{{
 		path:          "/foo/something",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/foo/:bar"},
 		expectParams:  hroute.Params{{"bar", "something"}},
 	}, {
 		path:          "/arble/something",
+		matchIndex:    1,
 		expectHandler: pathHandler{"GET", "/arble/:x"},
 		expectParams:  hroute.Params{{"x", "something"}},
 	}},
@@ -166,10 +181,12 @@ var handlerTests = []struct {
 	},
 	lookups: []lookupTest{{
 		path:          "/arble/something",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/*foo"},
 		expectParams:  hroute.Params{{"foo", "/arble/something"}},
 	}, {
 		path:          "/",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/*foo"},
 		expectParams:  hroute.Params{{"foo", "/"}},
 	}},
@@ -181,10 +198,12 @@ var handlerTests = []struct {
 	},
 	lookups: []lookupTest{{
 		path:          "/arble/something",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/*foo"},
 		expectParams:  hroute.Params{{"foo", "/arble/something"}},
 	}, {
 		path:          "/x/something",
+		matchIndex:    1,
 		expectHandler: pathHandler{"GET", "/x/:bar"},
 		expectParams:  hroute.Params{{"bar", "something"}},
 	}},
@@ -196,14 +215,17 @@ var handlerTests = []struct {
 	},
 	lookups: []lookupTest{{
 		path:          "/arble/something",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/*foo"},
 		expectParams:  hroute.Params{{"foo", "/arble/something"}},
 	}, {
 		path:          "/arble",
+		matchIndex:    1,
 		expectHandler: pathHandler{"GET", "/:bar"},
 		expectParams:  hroute.Params{{"bar", "arble"}},
 	}, {
 		path:          "/",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/*foo"},
 		expectParams:  hroute.Params{{"foo", "/"}},
 	}},
@@ -214,16 +236,20 @@ var handlerTests = []struct {
 	},
 	lookups: []lookupTest{{
 		path:          "/one/two/three",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/:foo/:bar/:baz"},
 		expectParams:  hroute.Params{{"foo", "one"}, {"bar", "two"}, {"baz", "three"}},
 	}, {
 		path:          "/one",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}, {
 		path:          "/one/two",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}, {
 		path:          "/one/two/three/four",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}},
 }, {
@@ -234,10 +260,12 @@ var handlerTests = []struct {
 	},
 	lookups: []lookupTest{{
 		path:          "/x/bar/baz",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/:foo/bar/baz"},
 		expectParams:  hroute.Params{{"foo", "x"}},
 	}, {
 		path:          "/y/floof/baz",
+		matchIndex:    1,
 		expectHandler: pathHandler{"GET", "/:foo/:x/baz"},
 		expectParams:  hroute.Params{{"foo", "y"}, {"x", "floof"}},
 	}},
@@ -249,13 +277,16 @@ var handlerTests = []struct {
 	},
 	lookups: []lookupTest{{
 		path:          "/a/b/c",
+		matchIndex:    0,
 		expectHandler: pathHandler{"GET", "/a/b/c"},
 	}, {
 		path:          "/a/xx/d",
+		matchIndex:    1,
 		expectHandler: pathHandler{"GET", "/a/:x/d"},
 		expectParams:  hroute.Params{{"x", "xx"}},
 	}, {
 		path:          "/a/b/d",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}},
 }, {
@@ -265,13 +296,15 @@ var handlerTests = []struct {
 		"/foo/baz/blah",
 	},
 	lookups: []lookupTest{{
-		path: "/foo/bar",
+		path:       "/foo/bar",
+		matchIndex: -1,
 		expectHandler: hroute.Redirect{
 			Code: 301,
 			Path: "/foo/bar/",
 		},
 	}, {
 		path:          "/foo",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}},
 }, {
@@ -281,13 +314,15 @@ var handlerTests = []struct {
 		"/foo/barfle",
 	},
 	lookups: []lookupTest{{
-		path: "/foo/bar",
+		path:       "/foo/bar",
+		matchIndex: -1,
 		expectHandler: hroute.Redirect{
 			Code: 301,
 			Path: "/foo/bar/",
 		},
 	}, {
-		path: "/foo/barfle",
+		path:       "/foo/barfle",
+		matchIndex: 1,
 	}},
 }, {
 	about: "no trailing slash redirect at node boundary",
@@ -297,24 +332,25 @@ var handlerTests = []struct {
 	},
 	lookups: []lookupTest{{
 		path:          "/foo/bar",
+		matchIndex:    -1,
 		expectHandler: hroute.NotFound{},
 	}, {
-		path: "/foo/barfle",
+		path:       "/foo/barfle",
+		matchIndex: 1,
 	}},
 }}
 
 func TestHandlerToUse(t *testing.T) {
 	for i, test := range handlerTests {
-		log.Printf("\ntest %d: %v", i, test.about)
-		t.Logf("\ntest %d: %v", i, test.about)
+		t.Logf("test %d: %v", i, test.about)
 
 		r := hroute.New()
-		for _, p := range test.add {
+		pats := make([]*hroute.Pattern, len(test.add))
+		for i, p := range test.add {
 			method, path := methodAndPath(p)
-			r.Handle(path, pathHandler{method, path}, method)
+			pats[i] = r.Handle(path, pathHandler{method, path}, method)
 		}
 		for _, ltest := range test.lookups {
-			log.Printf("- lookup %q", ltest.path)
 			t.Logf("- lookup %q", ltest.path)
 			method, path := methodAndPath(ltest.path)
 			resultHandler, resultParams := r.HandlerToUse(method, path)
@@ -326,13 +362,28 @@ func TestHandlerToUse(t *testing.T) {
 				}
 			}
 			if !reflect.DeepEqual(resultHandler, expectHandler) {
-				t.Errorf("unexpected result handler; got %#v want %#v", resultHandler, expectHandler)
+				t.Fatalf("unexpected result handler; got %#v want %#v", resultHandler, expectHandler)
 			}
 			if len(resultParams) == 0 {
 				resultParams = nil
 			}
 			if !reflect.DeepEqual(resultParams, ltest.expectParams) {
-				t.Errorf("unexpected result params; got %#v want %#v", resultParams, ltest.expectParams)
+				t.Fatalf("unexpected result params; got %#v want %#v", resultParams, ltest.expectParams)
+			}
+			if ltest.matchIndex != -1 {
+				// Check that the matched pattern can be used to recreate
+				// the path.
+				pat := pats[ltest.matchIndex]
+				vals := make([]string, len(resultParams))
+				for i, p := range resultParams {
+					vals[i] = p.Value
+				}
+				reversedPath, err := pat.Path(vals...)
+				if err != nil {
+					t.Fatalf("cannot reverse pattern path: %v", err)
+				} else if reversedPath != ltest.path {
+					t.Fatalf("pattern did not reverse; got %q want %q", reversedPath, ltest.path)
+				}
 			}
 		}
 	}
