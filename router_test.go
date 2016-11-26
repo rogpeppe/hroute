@@ -341,6 +341,40 @@ var handlerTests = []struct {
 		path:       "/foo/barfle",
 		matchIndex: 1,
 	}},
+}, {
+	about: "wildcard method matches any method",
+	add: []string{
+		"* /a",
+	},
+	lookups: []lookupTest{{
+		path:          "GET /a",
+		matchIndex:    0,
+		expectHandler: pathHandler{"*", "/a"},
+	}, {
+		path:          "OPTIONS /a",
+		matchIndex:    0,
+		expectHandler: pathHandler{"*", "/a"},
+	}},
+}, {
+	about: "specific methods override wildcard",
+	add: []string{
+		"* /a",
+		"GET /a",
+		"PUT /a",
+	},
+	lookups: []lookupTest{{
+		path:          "/a",
+		matchIndex:    1,
+		expectHandler: pathHandler{"GET", "/a"},
+	}, {
+		path:          "OPTIONS /a",
+		matchIndex:    0,
+		expectHandler: pathHandler{"*", "/a"},
+	}, {
+		path:          "PUT /a",
+		matchIndex:    2,
+		expectHandler: pathHandler{"PUT", "/a"},
+	}},
 }}
 
 func TestHandlerToUse(t *testing.T) {
@@ -374,11 +408,10 @@ func TestHandlerToUse(t *testing.T) {
 				t.Fatalf("unexpected result params; got %#v want %#v", resultParams, ltest.expectParams)
 			}
 			if ltest.matchIndex != -1 {
-				// Check that the matched pattern can be used to recreate
-				// the path.
+				// Check that the matched pattern can be used to recreate the path.
 				pat := pats[ltest.matchIndex]
 				if resultPat != pat {
-					t.Fatalf("unexpected pattern; got %q want %q", resultPat, pat)
+					t.Fatalf("pattern from HandlerToUse isn't equal to pattern from Handle; got %p (%q) want %p(%q)", resultPat, resultPat, pat, pat)
 				}
 				vals := make([]string, len(resultParams))
 				for i, p := range resultParams {
@@ -387,8 +420,8 @@ func TestHandlerToUse(t *testing.T) {
 				reversedPath, err := pat.Path(vals...)
 				if err != nil {
 					t.Fatalf("cannot reverse pattern path: %v", err)
-				} else if reversedPath != ltest.path {
-					t.Fatalf("pattern did not reverse; got %q want %q", reversedPath, ltest.path)
+				} else if reversedPath != path {
+					t.Fatalf("pattern did not reverse; got %q want %q", reversedPath, path)
 				}
 			}
 		}
