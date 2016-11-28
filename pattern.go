@@ -81,7 +81,17 @@ func ParsePattern(p string) (*Pattern, error) {
 	if CleanPath(p) != p {
 		return nil, fmt.Errorf("pattern is not clean")
 	}
-	var pat Pattern
+	n := 0
+	for i := 0; i < len(p); i++ {
+		if p[i] == ':' || p[i] == '*' {
+			n++
+		}
+	}
+	pat := Pattern{
+		static: make([]string, 0, n*2),
+		vars:   make([]string, 0, n),
+	}
+
 	if !strings.HasPrefix(p, "/") {
 		return nil, fmt.Errorf("path must start with /")
 	}

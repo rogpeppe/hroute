@@ -12,6 +12,12 @@ import (
 type Router struct {
 	root *node
 
+	// maxParams holds the maximum number of parameters
+	// used by any node.
+	// TODO store max per node so that we can allocate
+	// less for tree branches with less vars.
+	maxParams int
+
 	// NotFoundHandler is the handler used when no matching route is found.
 	// If it is nil, NotFound{} is used.
 	NotFound RouteHandler
@@ -49,6 +55,15 @@ type Param struct {
 // There will only be one instance of any given key.
 type Params []Param
 
+func (ps Params) Get(key string) string {
+	for _, p := range ps {
+		if p.Key == key {
+			return p.Value
+		}
+	}
+	return ""
+}
+
 // RouteHandler is the interface implemented by hroute HTTP handlers.
 // See HTTPHandler for an adaptor that will put the parameters
 // into the request context (only available on Go 1.7 and later).
@@ -79,12 +94,15 @@ func (r *Router) Handle(method, pattern string, handler RouteHandler) *Pattern {
 		panic(errgo.Newf("cannot parse pattern %q: %v", pattern, err))
 	}
 	r.root.addRoute(pat, method, handler)
+	if len(pat.Keys()) > r.maxParams {
+		r.maxParams = len(pat.Keys())
+	}
 	return pat
 }
 
-//func (r *Router) HandleFunc(method, pattern string, handler func(http.ResponseWriter, *http.Request, Params)) *Pattern {
-//	return r.Handle(method, pattern, RouteHandlerFunc(handler))
-//}
+func (r *Router) HandleFunc(method, pattern string, handler func(http.ResponseWriter, *http.Request, Params)) *Pattern {
+	return r.Handle(method, pattern, RouteHandlerFunc(handler))
+}
 
 // ServeHTTP implements http.Handler by consulting req.URL.Method
 // and req.URL.Path and calling the registered handler that most closely
@@ -98,7 +116,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // associated with the route. If there is no handler found, it returns
 // zero results.
 func (r *Router) Handler(method, path string) (RouteHandler, Params, *Pattern) {
-	h, p, pat, _ := r.root.getValue(method, path)
+	h, p, pat, _ := r.root.getValue(method, path, r.maxParams)
 	return h, p, pat
 }
 
@@ -109,7 +127,7 @@ func (r *Router) Handler(method, path string) (RouteHandler, Params, *Pattern) {
 // returned. If a handler was registered, the returned pattern will hold
 // the pattern it was registered with.
 func (r *Router) HandlerToUse(method, path string) (RouteHandler, Params, *Pattern) {
-	h, p, pat, node := r.root.getValue(method, path)
+	h, p, pat, node := r.root.getValue(method, path, r.maxParams)
 	if h != nil {
 		return h, p, pat
 	}
@@ -171,7 +189,7 @@ func (r *Router) slashRedirect(method, path string) string {
 	} else {
 		path += "/"
 	}
-	n, _ := r.root.lookup(path)
+	n, _ := r.root.lookup(path, r.maxParams)
 	if n == nil {
 		return ""
 	}

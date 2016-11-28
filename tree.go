@@ -38,10 +38,6 @@ type handlerEntry struct {
 	// handler holds the handler registered for a method in a node.
 	handler RouteHandler
 
-	// emptyParams holds the handler parameters with names
-	// filled out but empty values.
-	emptyParams Params
-
 	// pattern holds the pattern that was used to register the entry.
 	pattern *Pattern
 }
@@ -131,15 +127,10 @@ func (n *node) setHandler(method string, h RouteHandler, pat *Pattern) {
 	if oldEntry != nil && oldEntry.method == method {
 		panic("duplicate route")
 	}
-	emptyParams := make([]Param, len(pat.Keys()))
-	for i, v := range pat.Keys() {
-		emptyParams[i].Key = v
-	}
 	n.handlers = append(n.handlers, handlerEntry{
-		method:      method,
-		handler:     h,
-		emptyParams: emptyParams,
-		pattern:     pat,
+		method:  method,
+		handler: h,
+		pattern: pat,
 	})
 	if oldEntry == nil {
 		return
@@ -160,12 +151,13 @@ func (n *node) addChild(firstByte byte, n1 *node) int {
 	return len(n.child) - 1
 }
 
-func (n *node) lookup(path string) (*node, []string) {
+func (n *node) lookup(path string, maxParams int) (*node, Params) {
 	origPath := path
-	var vars []string
+	var params Params
 	var catchAll *node
 	var catchAllPath string
-	var catchAllVars []string
+	var catchAllParams Params
+lookupLoop:
 	for {
 		if len(path) < len(n.path) {
 			break
@@ -176,18 +168,20 @@ func (n *node) lookup(path string) (*node, []string) {
 			break
 		}
 		if path == "" {
-			return n, vars
+			return n, params
 		}
 		if n.catchAll != nil {
 			catchAllPath = path
 			catchAll = n.catchAll
-			catchAllVars = vars
+			catchAllParams = params
 		}
-		i := bytes.IndexByte(n.firstBytes, path[0])
-		if i >= 0 {
-			path = path[1:]
-			n = n.child[i]
-			continue
+		first := path[0]
+		for i, b := range n.firstBytes {
+			if first == b {
+				path = path[1:]
+				n = n.child[i]
+				continue lookupLoop
+			}
 		}
 		if n.wild == nil {
 			break
@@ -196,7 +190,12 @@ func (n *node) lookup(path string) (*node, []string) {
 		if elem == "" {
 			break
 		}
-		vars = append(vars, elem)
+		if params == nil {
+			params = make(Params, 0, maxParams)
+		}
+		params = append(params, Param{
+			Value: elem,
+		})
 		path = rest
 		n = n.wild
 	}
@@ -204,8 +203,10 @@ func (n *node) lookup(path string) (*node, []string) {
 		// The catchAll path needs to include the / that precedes it.
 		// We're guaranteed that there *is* a preceding / because
 		// the pattern parsing ensures it.
-		vars = append(catchAllVars, origPath[len(origPath)-len(catchAllPath)-1:])
-		return catchAll, vars
+		params = append(catchAllParams, Param{
+			Value: origPath[len(origPath)-len(catchAllPath)-1:],
+		})
+		return catchAll, params
 	}
 	return nil, nil
 }
@@ -215,8 +216,8 @@ func (n *node) lookup(path string) (*node, []string) {
 // to be passed to that handler.
 // It also returns any node found for the path, even if no handler
 // was found.
-func (n *node) getValue(method, path string) (h RouteHandler, p Params, pat *Pattern, foundNode *node) {
-	foundNode, vars := n.lookup(path)
+func (n *node) getValue(method, path string, maxParams int) (h RouteHandler, p Params, pat *Pattern, foundNode *node) {
+	foundNode, params := n.lookup(path, maxParams)
 	if foundNode == nil {
 		return nil, nil, nil, nil
 	}
@@ -232,17 +233,19 @@ func (n *node) getValue(method, path string) (h RouteHandler, p Params, pat *Pat
 		if entry == nil {
 			return nil, nil, nil, foundNode
 		}
-		vars = append(vars, "/")
+		params = append(params, Param{
+			Value: "/",
+		})
 	}
-	if len(vars) == 0 {
+	if len(params) == 0 {
 		return entry.handler, nil, entry.pattern, foundNode
 	}
-	p = make(Params, len(vars))
-	copy(p, entry.emptyParams)
-	for i, v := range vars {
-		p[i].Value = v
+	// Fill in the keys that were used to register this particular
+	// handler.
+	for i, key := range entry.pattern.Keys() {
+		params[i].Key = key
 	}
-	return entry.handler, p, entry.pattern, foundNode
+	return entry.handler, params, entry.pattern, foundNode
 }
 
 func (n *node) findCaseInsensitivePath(path string, redir bool) (string, bool) {

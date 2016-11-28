@@ -7,6 +7,7 @@ import (
 // NotFound implements
 type NotFound struct{}
 
+// ServeRoute implements RouteHandler.ServeRoute by calling http.NotFound.
 func (h NotFound) ServeRoute(w http.ResponseWriter, req *http.Request, _ Params) {
 	http.NotFound(w, req)
 }
@@ -27,4 +28,10 @@ type Redirect struct {
 
 func (r Redirect) ServeRoute(w http.ResponseWriter, req *http.Request, _ Params) {
 	http.Redirect(w, req, r.Path, r.Code)
+}
+
+type RouteHandlerFunc func(http.ResponseWriter, *http.Request, Params)
+
+func (r RouteHandlerFunc) ServeRoute(w http.ResponseWriter, req *http.Request, p Params) {
+	r(w, req, p)
 }
