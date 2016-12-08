@@ -17,7 +17,7 @@ func TestGithubRoutes(t *testing.T) {
 	for i, p := range githubAPI {
 		i, p := i, p
 		method, path := methodAndPath(p)
-		r.Handle(method, path, hroute.RouteHandlerFunc(func(_ http.ResponseWriter, req *http.Request, p hroute.Params) {
+		r.Handle(method, path, hroute.HandlerFunc(func(_ http.ResponseWriter, req *http.Request, p hroute.Params) {
 			called = i
 			calledMethod = req.Method
 			calledParams = p

@@ -36,13 +36,13 @@ type handlerEntry struct {
 	method string
 
 	// handler holds the handler registered for a method in a node.
-	handler RouteHandler
+	handler Handler
 
 	// pattern holds the pattern that was used to register the entry.
 	pattern *Pattern
 }
 
-func (n *node) addRoute(pat *Pattern, method string, h RouteHandler) {
+func (n *node) addRoute(pat *Pattern, method string, h Handler) {
 	var prefix string
 	pat1 := *pat
 	prefix, pat1.static = pat1.static[0], pat1.static[1:]
@@ -64,7 +64,7 @@ func (n *node) entryForMethod(method string) *handlerEntry {
 // we're adding and all the variable names defined by the pattern.
 //
 // Precondition: pat.static is either empty or its first element is empty.
-func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h RouteHandler, origPat *Pattern) {
+func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Handler, origPat *Pattern) {
 	common := commonPrefix(prefix, n.path)
 	if len(common) < len(n.path) {
 		// This node's prefix is too long; split it,
@@ -122,7 +122,7 @@ func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Rou
 	n.addStaticPrefix(prefix, pat, method, h, origPat)
 }
 
-func (n *node) setHandler(method string, h RouteHandler, pat *Pattern) {
+func (n *node) setHandler(method string, h Handler, pat *Pattern) {
 	oldEntry := n.entryForMethod(method)
 	if oldEntry != nil && oldEntry.method == method {
 		panic("duplicate route")
@@ -216,7 +216,7 @@ lookupLoop:
 // to be passed to that handler.
 // It also returns any node found for the path, even if no handler
 // was found.
-func (n *node) getValue(method, path string, maxParams int) (h RouteHandler, p Params, pat *Pattern, foundNode *node) {
+func (n *node) getValue(method, path string, maxParams int) (h Handler, p Params, pat *Pattern, foundNode *node) {
 	foundNode, params := n.lookup(path, maxParams)
 	if foundNode == nil {
 		return nil, nil, nil, nil

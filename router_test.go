@@ -90,7 +90,7 @@ type lookupTest struct {
 	// expectHandler holds the handler that's expected
 	// to be found when looking up path.
 	// If it's nil, pathHandler{methid path} is expected.
-	expectHandler hroute.RouteHandler
+	expectHandler hroute.Handler
 
 	expectParams hroute.Params
 

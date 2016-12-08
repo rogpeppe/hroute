@@ -20,13 +20,13 @@ type Router struct {
 
 	// NotFoundHandler is the handler used when no matching route is found.
 	// If it is nil, NotFound{} is used.
-	NotFound RouteHandler
+	NotFound Handler
 
 	// MethodNotAllowedHandler is the handler used when a handler
 	// cannot be found for a given method but there is a handler
 	// for the requested path. If it is nil, MethodNotAllowed{} will be
 	// used.
-	MethodNotAllowed RouteHandler
+	MethodNotAllowed Handler
 
 	// When Panic is not nil, panics in handlers will be
 	// recovered and PanicHandler will be called with the HTTP
@@ -37,7 +37,7 @@ type Router struct {
 	// http error code 500 (Internal Server Error). The handler can
 	// be used to keep your server from crashing because of
 	// unrecovered panics.
-	Panic func(w http.ResponseWriter, req *http.Request, h RouteHandler, p Params, err interface{})
+	Panic func(w http.ResponseWriter, req *http.Request, h Handler, p Params, err interface{})
 }
 
 // Param holds a path parameter that represents the value of
@@ -64,10 +64,10 @@ func (ps Params) Get(key string) string {
 	return ""
 }
 
-// RouteHandler is the interface implemented by hroute HTTP handlers.
+// Handler is the interface implemented by hroute HTTP handlers.
 // See HTTPHandler for an adaptor that will put the parameters
 // into the request context (only available on Go 1.7 and later).
-type RouteHandler interface {
+type Handler interface {
 	ServeRoute(http.ResponseWriter, *http.Request, Params)
 }
 
@@ -88,7 +88,7 @@ func New() *Router {
 // or the pattern is invalid, Handle panics.
 //
 // It returns the parsed pattern, suitable for recreating the path.
-func (r *Router) Handle(method, pattern string, handler RouteHandler) *Pattern {
+func (r *Router) Handle(method, pattern string, handler Handler) *Pattern {
 	pat, err := ParsePattern(pattern)
 	if err != nil {
 		panic(errgo.Newf("cannot parse pattern %q: %v", pattern, err))
@@ -101,7 +101,7 @@ func (r *Router) Handle(method, pattern string, handler RouteHandler) *Pattern {
 }
 
 func (r *Router) HandleFunc(method, pattern string, handler func(http.ResponseWriter, *http.Request, Params)) *Pattern {
-	return r.Handle(method, pattern, RouteHandlerFunc(handler))
+	return r.Handle(method, pattern, HandlerFunc(handler))
 }
 
 // ServeHTTP implements http.Handler by consulting req.URL.Method
@@ -115,7 +115,7 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 // parameters appropriate for passing to the handler, and the pattern
 // associated with the route. If there is no handler found, it returns
 // zero results.
-func (r *Router) Handler(method, path string) (RouteHandler, Params, *Pattern) {
+func (r *Router) Handler(method, path string) (Handler, Params, *Pattern) {
 	h, p, pat, _ := r.root.getValue(method, path, r.maxParams)
 	return h, p, pat
 }
@@ -126,7 +126,7 @@ func (r *Router) Handler(method, path string) (RouteHandler, Params, *Pattern) {
 // value of type NotFound, MethodNotAllowed or Redirect will be
 // returned. If a handler was registered, the returned pattern will hold
 // the pattern it was registered with.
-func (r *Router) HandlerToUse(method, path string) (RouteHandler, Params, *Pattern) {
+func (r *Router) HandlerToUse(method, path string) (Handler, Params, *Pattern) {
 	h, p, pat, node := r.root.getValue(method, path, r.maxParams)
 	if h != nil {
 		return h, p, pat
@@ -175,7 +175,7 @@ func (r *Router) ServeHTTPSubroute(w http.ResponseWriter, req *http.Request, pat
 	handler.ServeRoute(w, req, params)
 }
 
-func (r *Router) recover(w http.ResponseWriter, req *http.Request, h RouteHandler, p Params) {
+func (r *Router) recover(w http.ResponseWriter, req *http.Request, h Handler, p Params) {
 	if rcv := recover(); rcv != nil {
 		r.Panic(w, req, h, p, rcv)
 	}
