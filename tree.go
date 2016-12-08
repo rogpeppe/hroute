@@ -1,21 +1,9 @@
-package hrouter
+package hroute
 
 import (
 	"bytes"
-	"net/http"
 	"strings"
 )
-
-type Param struct {
-	Key   string
-	Value string
-}
-
-type Params []Param
-
-type Handle interface {
-	ServeHTTP(http.ResponseWriter, *http.Request, Params)
-}
 
 type node struct {
 	// path holds the path segment matched by
@@ -36,34 +24,47 @@ type node struct {
 	// here. Note that it will always be a leaf if present.
 	catchAll *node
 
-	// handlers holds the handlers registered for this node,
-	// indexed by method name.
-	handlers map[string]handlerEntry
+	// handlers holds the handlers registered for this node.
+	// There is at most one entry for a given method.
+	handlers []handlerEntry
 }
 
 type handlerEntry struct {
+	// method holds the method the entry is registered for.
+	// If this is "*", the entry serves all methods that
+	// aren't registered specifically.
+	method string
+
 	// handler holds the handler registered for a method in a node.
-	handler Handle
+	handler RouteHandler
 
-	// emptyParams holds the handler parameters with names
-	// filled out but empty values.
-	emptyParams Params
+	// pattern holds the pattern that was used to register the entry.
+	pattern *Pattern
 }
 
-func (n *node) addRoute(pat *Pattern, method string, h Handle) {
+func (n *node) addRoute(pat *Pattern, method string, h RouteHandler) {
 	var prefix string
-	prefix, pat.static = pat.static[0], pat.static[1:]
-	n.addStaticPrefix(prefix, pat, method, h)
+	pat1 := *pat
+	prefix, pat1.static = pat1.static[0], pat1.static[1:]
+	n.addStaticPrefix(prefix, &pat1, method, h, pat)
 }
 
-// addStaticPrefix adds a route to the given node for the
-// given static prefix. The given pattern holds the
-// remaining elements of the pattern
-// we're adding and all the variable names defined
-// by the pattern.
+func (n *node) entryForMethod(method string) *handlerEntry {
+	for i := range n.handlers {
+		e := &n.handlers[i]
+		if e.method == "*" || e.method == method {
+			return e
+		}
+	}
+	return nil
+}
+
+// addStaticPrefix adds a route to the given node for the given static
+// prefix. The given pattern holds the remaining elements of the pattern
+// we're adding and all the variable names defined by the pattern.
 //
 // Precondition: pat.static is either empty or its first element is empty.
-func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Handle) {
+func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h RouteHandler, origPat *Pattern) {
 	common := commonPrefix(prefix, n.path)
 	if len(common) < len(n.path) {
 		// This node's prefix is too long; split it,
@@ -88,17 +89,17 @@ func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Han
 			})
 		}
 		// Descend further into the tree.
-		n.child[i].addStaticPrefix(prefix[1:], pat, method, h)
+		n.child[i].addStaticPrefix(prefix[1:], pat, method, h, origPat)
 		return
 	}
 	// Invariant: common == prefix
 	if len(pat.static) == 0 {
 		// We've arrived at our destination.
-		n.setHandler(method, h, pat.vars)
+		n.setHandler(method, h, origPat)
 		return
 	}
-	// We're adding a wildcard, which might be a
-	// single segment or a final catch-all segment.
+	// We're adding a wildcard, which might be a single segment or a
+	// final catch-all segment.
 	wildPt := &n.wild
 	if len(pat.static) == 1 && pat.catchAll {
 		wildPt = &n.catchAll
@@ -111,32 +112,37 @@ func (n *node) addStaticPrefix(prefix string, pat *Pattern, method string, h Han
 	pat.static = pat.static[1:]
 	// Invariant: pat.static is either empty or its first element is non-empty.
 	if len(pat.static) == 0 {
-		// We've reach our destination.
-		n.setHandler(method, h, pat.vars)
+		// We've reached our destination.
+		n.setHandler(method, h, origPat)
 		return
 	}
 	// Descend further into the tree
 	prefix = pat.static[0]
 	pat.static = pat.static[1:]
-	n.addStaticPrefix(prefix, pat, method, h)
+	n.addStaticPrefix(prefix, pat, method, h, origPat)
 }
 
-func (n *node) setHandler(method string, h Handle, vars []string) {
-	if n.handlers == nil {
-		n.handlers = make(map[string]handlerEntry)
-	}
-	if n.handlers[method].handler != nil {
+func (n *node) setHandler(method string, h RouteHandler, pat *Pattern) {
+	oldEntry := n.entryForMethod(method)
+	if oldEntry != nil && oldEntry.method == method {
 		panic("duplicate route")
 	}
-
-	emptyParams := make([]Param, len(vars))
-	for i, v := range vars {
-		emptyParams[i].Key = v
+	n.handlers = append(n.handlers, handlerEntry{
+		method:  method,
+		handler: h,
+		pattern: pat,
+	})
+	if oldEntry == nil {
+		return
 	}
-	n.handlers[method] = handlerEntry{
-		handler:     h,
-		emptyParams: emptyParams,
-	}
+	// There was an old matching entry which must be a
+	// wildcard method at the end of the slice, so keep it
+	// at the end by swapping it with the entry we've just
+	// added. This means we can continue to do a simple
+	// linear search in entryForMethod and have it pick up
+	// the non-wildcard-method handlers first.
+	hlen := len(n.handlers)
+	n.handlers[hlen-2], n.handlers[hlen-1] = n.handlers[hlen-1], n.handlers[hlen-2]
 }
 
 func (n *node) addChild(firstByte byte, n1 *node) int {
@@ -145,12 +151,13 @@ func (n *node) addChild(firstByte byte, n1 *node) int {
 	return len(n.child) - 1
 }
 
-func (n *node) lookup(path string) (*node, []string) {
+func (n *node) lookup(path string, maxParams int) (*node, Params) {
 	origPath := path
-	var vars []string
+	var params Params
 	var catchAll *node
 	var catchAllPath string
-	var catchAllVars []string
+	var catchAllParams Params
+lookupLoop:
 	for {
 		if len(path) < len(n.path) {
 			break
@@ -161,18 +168,20 @@ func (n *node) lookup(path string) (*node, []string) {
 			break
 		}
 		if path == "" {
-			return n, vars
+			return n, params
 		}
 		if n.catchAll != nil {
 			catchAllPath = path
 			catchAll = n.catchAll
-			catchAllVars = vars
+			catchAllParams = params
 		}
-		i := bytes.IndexByte(n.firstBytes, path[0])
-		if i >= 0 {
-			path = path[1:]
-			n = n.child[i]
-			continue
+		first := path[0]
+		for i, b := range n.firstBytes {
+			if first == b {
+				path = path[1:]
+				n = n.child[i]
+				continue lookupLoop
+			}
 		}
 		if n.wild == nil {
 			break
@@ -181,7 +190,12 @@ func (n *node) lookup(path string) (*node, []string) {
 		if elem == "" {
 			break
 		}
-		vars = append(vars, elem)
+		if params == nil {
+			params = make(Params, 0, maxParams)
+		}
+		params = append(params, Param{
+			Value: elem,
+		})
 		path = rest
 		n = n.wild
 	}
@@ -189,8 +203,10 @@ func (n *node) lookup(path string) (*node, []string) {
 		// The catchAll path needs to include the / that precedes it.
 		// We're guaranteed that there *is* a preceding / because
 		// the pattern parsing ensures it.
-		vars = append(catchAllVars, origPath[len(origPath)-len(catchAllPath)-1:])
-		return catchAll, vars
+		params = append(catchAllParams, Param{
+			Value: origPath[len(origPath)-len(catchAllPath)-1:],
+		})
+		return catchAll, params
 	}
 	return nil, nil
 }
@@ -200,46 +216,36 @@ func (n *node) lookup(path string) (*node, []string) {
 // to be passed to that handler.
 // It also returns any node found for the path, even if no handler
 // was found.
-func (n *node) getValue(method, path string) (h Handle, p Params, foundNode *node) {
-	foundNode, vars := n.lookup(path)
+func (n *node) getValue(method, path string, maxParams int) (h RouteHandler, p Params, pat *Pattern, foundNode *node) {
+	foundNode, params := n.lookup(path, maxParams)
 	if foundNode == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
-	entry := foundNode.handlers[method]
-	if entry.handler == nil {
+	entry := foundNode.entryForMethod(method)
+	if entry == nil {
 		// No handler found directly in this node, but if
 		// there's a catchAll handler, we can fall back to that.
 		if foundNode.catchAll == nil {
-			return nil, nil, foundNode
+			// No catchAll handler to fall back to.
+			return nil, nil, nil, foundNode
 		}
-		entry = foundNode.catchAll.handlers[method]
-		if entry.handler == nil {
-			return nil, nil, foundNode
+		entry = foundNode.catchAll.entryForMethod(method)
+		if entry == nil {
+			return nil, nil, nil, foundNode
 		}
-		vars = append(vars, "/")
+		params = append(params, Param{
+			Value: "/",
+		})
 	}
-	if len(vars) == 0 {
-		return entry.handler, nil, foundNode
+	if len(params) == 0 {
+		return entry.handler, nil, entry.pattern, foundNode
 	}
-	p = make(Params, len(vars))
-	copy(p, entry.emptyParams)
-	for i, v := range vars {
-		p[i].Value = v
+	// Fill in the keys that were used to register this particular
+	// handler.
+	for i, key := range entry.pattern.Keys() {
+		params[i].Key = key
 	}
-	return entry.handler, p, foundNode
-}
-
-func (n *node) slashRedirect(path string) string {
-	if strings.HasSuffix(path, "/") {
-		path = path[0 : len(path)-1]
-	} else {
-		path += "/"
-	}
-	n, _ = n.lookup(path)
-	if n != nil && len(n.handlers) > 0 {
-		return path
-	}
-	return ""
+	return entry.handler, params, entry.pattern, foundNode
 }
 
 func (n *node) findCaseInsensitivePath(path string, redir bool) (string, bool) {

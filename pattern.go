@@ -1,12 +1,10 @@
-package hrouter
+package hroute
 
 import (
 	"fmt"
 	"strings"
 
 	"gopkg.in/errgo.v1"
-
-	"github.com/julienschmidt/httprouter"
 )
 
 // Pattern holds a parsed path pattern.
@@ -17,15 +15,36 @@ type Pattern struct {
 	staticSize int // sum(len(static[i]))
 }
 
+// String returns the string representation of the pattern.
+func (p *Pattern) String() string {
+	size := p.staticSize
+	for _, v := range p.vars {
+		size += len(v)
+	}
+	r := make([]byte, 0, size)
+	for i, s := range p.static {
+		if s != "" {
+			r = append(r, s...)
+			continue
+		}
+		if p.catchAll && i == len(p.static)-1 {
+			r = append(r, '*')
+		} else {
+			r = append(r, ':')
+		}
+		r = append(r, p.vars[i/2]...)
+	}
+	return string(r)
+}
+
 // Each non-empty element of Pattern.static holds a static segment of
 // the path. Each element of vars holds the name of a wildcard variable
 // inside the path between two pattern segments. If catchAll is true,
 // the last variable is a * pattern that matches any number of trailing
 // path elements.
 //
-// Every place in static corresponding to a wildcard
-// variable is empty. The variable for static[i]
-// is at vars[i/2].
+// Every place in static corresponding to a wildcard variable is empty.
+// The variable for static[i] is at vars[i/2].
 //
 // For example, parsing: /:foo/a/b/c/:e/*c
 // would result in:
@@ -36,12 +55,10 @@ type Pattern struct {
 //		catchAll: true,
 //	}
 
-// ParsePattern parses the given router pattern
-// from the given path.
-// A valid pattern always starts with a leading "/".
-// Named portions of the path are dynamic path
-// segments, of the form :param. They match a segment of the path,
-// so they must be preceded by a "/" and followed
+// ParsePattern parses the given router pattern from the given path. A
+// valid pattern always starts with a leading "/". Named portions of the
+// path are dynamic path segments, of the form :param. They match a
+// segment of the path, so they must be preceded by a "/" and followed
 // by a "/" or appear at the end of the string.
 //
 // For example:
@@ -50,11 +67,10 @@ type Pattern struct {
 //
 // would match /foo/info but not /foo/bar/info.
 //
-// A catch-all pattern of the form *param may appear
-// at the end of the path and matches any number of
-// path segments at the end of the pattern.
-// It must be preceded by a "/". The value of
-// a catch-all parameter will include a leading "/".
+// A catch-all pattern of the form *param may appear at the end of the
+// path and matches any number of path segments at the end of the
+// pattern. It must be preceded by a "/". The value of a catch-all
+// parameter will include a leading "/".
 //
 // For example:
 //
@@ -62,10 +78,20 @@ type Pattern struct {
 //
 // would match /foo/info and /foo/bar/info.
 func ParsePattern(p string) (*Pattern, error) {
-	if httprouter.CleanPath(p) != p {
-		return nil, fmt.Errorf("path is not clean")
+	if CleanPath(p) != p {
+		return nil, fmt.Errorf("pattern is not clean")
 	}
-	var pat Pattern
+	n := 0
+	for i := 0; i < len(p); i++ {
+		if p[i] == ':' || p[i] == '*' {
+			n++
+		}
+	}
+	pat := Pattern{
+		static: make([]string, 0, n*2),
+		vars:   make([]string, 0, n),
+	}
+
 	if !strings.HasPrefix(p, "/") {
 		return nil, fmt.Errorf("path must start with /")
 	}
@@ -109,10 +135,16 @@ func ParsePattern(p string) (*Pattern, error) {
 	return &pat, nil
 }
 
-// Names returns all the parameter names specified
+// CatchAll reports whether the pattern has a :* suffix
+// which will catch all paths unde+
+func (p *Pattern) CatchAll() bool {
+	return p.catchAll
+}
+
+// Keys returns all the parameter keys specified
 // in the pattern. The caller must not change
 // the elements of the returned slice.
-func (p *Pattern) Names() []string {
+func (p *Pattern) Keys() []string {
 	return p.vars
 }
 
@@ -120,13 +152,13 @@ func (p *Pattern) Names() []string {
 // given parameter values. All the parameter values
 // must be non-empty. Each value corresponds to
 // the parameter at the same position in the slice
-// returned by Names.
+// returned by Keys.
 //
 // For example, if the original pattern path
-// was /foo/:name/*rest then Names would
+// was /foo/:name/*rest then Keys would
 // return {"name", "rest"} and Path("a", "/b/c")
 // would return /foo/a/b/c.
-func (p *Pattern) Path(vals []string) (string, error) {
+func (p *Pattern) Path(vals ...string) (string, error) {
 	if len(vals) != len(p.vars) {
 		return "", errgo.Newf("too few parameters")
 	}
@@ -151,9 +183,17 @@ func (p *Pattern) Path(vals []string) (string, error) {
 			if val == "" {
 				return "", errgo.Newf("empty parameter")
 			}
-			// TODO check that val contains a / ?
+			// TODO check that val does not a / ?
 		}
 		path = append(path, val...)
 	}
 	return string(path), nil
+}
+
+// PathWithParams returns a path constructed by interpolating
+// the parameter values in p, which must contain elements
+// with all the keys returned by p.Keys.
+func (p *Pattern) PathWithParams(Params) (string, error) {
+	// TODO implement.
+	return "", errgo.Newf("unimplemented")
 }
