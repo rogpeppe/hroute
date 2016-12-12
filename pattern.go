@@ -166,7 +166,6 @@ func (p *Pattern) Path(vals ...string) (string, error) {
 	for _, val := range vals {
 		size += len(val)
 	}
-	// TODO allocate exactly the size needed
 	path := make([]byte, 0, size)
 	for i, elem := range p.static {
 		if elem != "" {
@@ -183,7 +182,7 @@ func (p *Pattern) Path(vals ...string) (string, error) {
 			if val == "" {
 				return "", errgo.Newf("empty parameter")
 			}
-			// TODO check that val does not a / ?
+			// TODO check that val does not contain a / ?
 		}
 		path = append(path, val...)
 	}

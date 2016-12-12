@@ -1,3 +1,42 @@
+// Copyright 2016 Roger Peppe. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be found
+// in the LICENSE file.
+
+// Package hroute implements yet another HTTP route multiplexer. The
+// design is strongly influenced by Julien Schmidt's httprouter package
+// but the matching algorithm is more general and although httprouter
+// was used to start the implementation, there is very little code left
+// in common between the two.
+//
+// Specific differences from httprouter:
+//
+// - a specific pattern may override a more general pattern. For
+// example, it will allow both "/:id" and "/debug" patterns to be
+// registered. This applies to catch-all *name patterns too - the
+// longest explicit match wins. Note that the pattern matching algorithm
+// is not order dependent - no matter what order the patterns are
+// registered in, the result will be the same.
+//
+// - it provides a facility for subroute handling - a Router
+// can be used to serve a set of subroutes within a larger
+// superstructure.
+//
+// - it provides a way to build paths from routes - the
+// *Pattern value returned from Handle allows the reconstruction
+// of a path from a registered route.
+//
+// - the handler type is an interface not a function, allowing clients
+// to store and retrieve extra information from the router tree if
+// needed.
+//
+// - it is possible to register a handler that will handle all methods
+// by registering with the "*" method. This will be overridden be
+// more specific method handlers.
+//
+// - much of the naming has also been changed to be more consistent
+// with the net/http and its ServeMux type.
+//
+// - there is no case-insensitive path lookup.
 package hroute
 
 import (
@@ -55,6 +94,8 @@ type Param struct {
 // There will only be one instance of any given key.
 type Params []Param
 
+// Get returns the first value with the given key, or
+// the empty string if it is not found.
 func (ps Params) Get(key string) string {
 	for _, p := range ps {
 		if p.Key == key {
@@ -100,6 +141,7 @@ func (r *Router) Handle(method, pattern string, handler Handler) *Pattern {
 	return pat
 }
 
+// HandleFunc a convenience method that calls Handle with HandlerFunc(handler).
 func (r *Router) HandleFunc(method, pattern string, handler func(http.ResponseWriter, *http.Request, Params)) *Pattern {
 	return r.Handle(method, pattern, HandlerFunc(handler))
 }
@@ -108,7 +150,18 @@ func (r *Router) HandleFunc(method, pattern string, handler func(http.ResponseWr
 // and req.URL.Path and calling the registered handler that most closely
 // matches.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
-	r.ServeHTTPSubroute(w, req, req.URL.Path)
+	r.ServeSubroute(w, req, req.URL.Path)
+}
+
+// ServeRoute implements Handler by calling ServeSubroute with path
+// set to the value of the last element in p. This allows a Router to be
+// registered directly as a subroute handler for a subpath.
+func (r *Router) ServeRoute(w http.ResponseWriter, req *http.Request, p Params) {
+	val := ""
+	if len(p) > 0 {
+		val = p[len(p)-1].Value
+	}
+	r.ServeSubroute(w, req, val)
 }
 
 // Handler returns the handler to use for the given method and path, the
@@ -120,12 +173,32 @@ func (r *Router) Handler(method, path string) (Handler, Params, *Pattern) {
 	return h, p, pat
 }
 
+// ServeSubroute is like ServeHTTP except that instead of using
+// req.URL.Path to route requests, it uses the given path
+// parameter.
+//
+// This is useful when the router is being used to serve a subtree
+// but it is desired to keep the request URL intact.
+func (r *Router) ServeSubroute(w http.ResponseWriter, req *http.Request, path string) {
+	handler, params, _ := r.HandlerToUse(req.Method, path)
+	if r.Panic != nil {
+		defer r.recover(w, req, handler, params)
+	}
+	handler.ServeRoute(w, req, params)
+}
+
+func (r *Router) recover(w http.ResponseWriter, req *http.Request, h Handler, p Params) {
+	if rcv := recover(); rcv != nil {
+		r.Panic(w, req, h, p, rcv)
+	}
+}
+
 // HandlerToUse returns the handler that will be used to handle a
 // request with the given method and path. It never returns a nil
-// handler. If a handler has not been registered with the given path, a
-// value of type NotFound, MethodNotAllowed or Redirect will be
-// returned. If a handler was registered, the returned pattern will hold
-// the pattern it was registered with.
+// handler. If a handler has not been registered with the given path,
+// one of r.NotFound, r.MethodNotAllowed or a value of type Redirect
+// will be returned. If a handler was registered, the returned pattern
+// will hold the pattern it was registered with.
 func (r *Router) HandlerToUse(method, path string) (Handler, Params, *Pattern) {
 	h, p, pat, node := r.root.getValue(method, path, r.maxParams)
 	if h != nil {
@@ -159,26 +232,6 @@ func (r *Router) HandlerToUse(method, path string) (Handler, Params, *Pattern) {
 		}, Params{}, nil
 	}
 	return r.NotFound, Params{}, nil
-}
-
-// ServeHTTPSubroute is like ServeHTTP except that instead of using
-// req.URL.Path to route requests, it uses the given path
-// parameter.
-//
-// This is useful when the router is being used to serve a subtree
-// but it is desired to keep the request URL intact.
-func (r *Router) ServeHTTPSubroute(w http.ResponseWriter, req *http.Request, path string) {
-	handler, params, _ := r.HandlerToUse(req.Method, path)
-	if r.Panic != nil {
-		defer r.recover(w, req, handler, params)
-	}
-	handler.ServeRoute(w, req, params)
-}
-
-func (r *Router) recover(w http.ResponseWriter, req *http.Request, h Handler, p Params) {
-	if rcv := recover(); rcv != nil {
-		r.Panic(w, req, h, p, rcv)
-	}
 }
 
 // slashRedirect returns a possible redirected path when the
